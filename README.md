@@ -20,7 +20,7 @@ This core is the foundation for tools like `cdiff` but can be used for any task 
 - [The Power of Tokenization](#the-power-of-tokenization)
 - [Installation](#installation)
 - [Basic Usage](#basic-usage)
-- [Plugin System (Strategies)]#plugin-system--strategies)
+- [Plugin System (Strategies)](#plugin-system--strategies)
   - [`patienceDiff`](#patiencediff)
   - [`preserveStructure`](#preservestructure)
 - [Developer Guide: The Toolbox API](#developer-guide-the-toolbox-api)
