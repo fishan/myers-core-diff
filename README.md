@@ -1,4 +1,7 @@
+
+
 # myers-core-diff
+
 
 [![NPM Version](https://img.shields.io/npm/v/@fishan/myers-core-diff.svg?style=flat)](https://www.npmjs.com/package/@fishan/myers-core-diff)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/fishan/myers-core-diff/ci.yml?branch=main)](https://github.com/fishan/myers-core-diff/actions)
@@ -7,6 +10,30 @@
 **A high-performance core diff engine based on Myers' algorithm, designed as an extensible "Toolbox" that can be enhanced with pluggable strategies.**
 
 This core is the foundation for tools like `cdiff` but can be used for any task requiring fast and accurate sequence comparison (lines, tokens, DNA, etc.).
+
+---
+
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Real-World Implementation](#real-world-implementation)
+- [The Power of Tokenization](#the-power-of-tokenization)
+- [Installation](#installation)
+- [Basic Usage](#basic-usage)
+- [Plugin System (Strategies)]#plugin-system--strategies)
+  - [`patienceDiff`](#patiencediff)
+  - [`preserveStructure`](#preservestructure)
+- [Developer Guide: The Toolbox API](#developer-guide-the-toolbox-api)
+  - [`engine._recursiveDiff(...)`](#1-enginerecursivediff)
+  - [`engine._findAnchors(...)`](#2-enginefindanchors)
+  - [`engine._guidedCalculateDiff(...)`](#3-engineguidedcalculatediff)
+  - [`engine._createDeletions(...)` / `engine._createAdditions(...)`](#4-enginecreatedeletions--enginecreateadditions)
+- [Core API (`MyersCoreDiff`)](#core-api--myerscorediff)
+- [Options (`DiffOptions`)](#options--diffoptions)
+- [Test Suite](#test-suite)
+- [License](#license)
+
+---
 
 ## Key Features
 
@@ -62,7 +89,7 @@ The engine simply finds the shortest edit script to turn one sequence of *intege
 
 ```bash
 npm install @fishan/myers-core-diff
-````
+```
 
 ## Basic Usage
 
@@ -96,7 +123,7 @@ console.log(result);
 */
 ```
 
------
+---
 
 ## Plugin System (Strategies)
 
@@ -106,7 +133,7 @@ This is the most powerful feature. You can completely change the diff logic with
 
 The core ships with two powerful strategies besides `commonSES`: `patienceDiff` and `preserveStructure`. They must be registered before use.
 
-#### `patienceDiff`
+### `patienceDiff`
 
 Excellent for code, as it focuses on unique lines that haven't changed and ignores "noise" (e.g., shifted blocks).
 
@@ -124,7 +151,7 @@ const options = { diffStrategyName: 'patienceDiff' };
 const result = differ.diff(oldCode, newCode, false, options);
 ```
 
-#### `preserveStructure`
+### `preserveStructure`
 
 A hybrid strategy that attempts to maintain positional stability (L2 anchors) but uses floating L1 and L3 anchors to find matches within modified blocks.
 
@@ -142,7 +169,7 @@ const options = { diffStrategyName: 'preserveStructure' };
 const result = differ.diff(oldText, newText, false, options);
 ```
 
------
+---
 
 ## Developer Guide: The Toolbox API
 
@@ -150,45 +177,36 @@ When you build a plugin, you receive the `engine` instance. This is your "Toolbo
 
 All Toolbox methods (like `_recursiveDiff`, `_findAnchors`) operate on tokenized `Uint32Array` inputs for maximum performance.
 
-### 1\. `engine._recursiveDiff(...)`
+### 1. `engine._recursiveDiff(...)`
 
-  * **What it is:** The main, classic Myers' O(ND) algorithm, implemented with the "middle snake" optimization.
-  * **Principle:** This function is guaranteed to find the **Shortest Edit Script (SES)**. It works by finding a "middle snake" (a common subsequence) near the center of the diff region, which divides the problem (A vs B) into two smaller, independent problems (A-prefix vs B-prefix and A-suffix vs B-suffix). It then calls itself recursively on these smaller problems.
-  * **When to use it:** This is your precision tool. Use it for small-to-medium sized "gaps" between anchors (e.g., `N+M < hugeDiffThreshold`).
-  * **Advantages:** 100% accurate (finds the shortest possible list of edits).
-  * **Disadvantages:** Can be computationally expensive. Its performance is `O(ND)`, where `D` is the number of differences. In worst-case scenarios (low similarity), `D` approaches `N`, and performance degrades to `O(N^2)`.
-  * **Example:** The default `commonSES` strategy is essentially a direct wrapper around this one method, with a fallback to `_guidedCalculateDiff` for very large gaps.
+* **What it is:** The main, classic Myers' O(ND) algorithm, implemented with the "middle snake" optimization.
+* **Principle:** This function is guaranteed to find the **Shortest Edit Script (SES)**. It works by finding a "middle snake" (a common subsequence) near the center of the diff region, which divides the problem (A vs B) into two smaller, independent problems (A-prefix vs B-prefix and A-suffix vs B-suffix). It then calls itself recursively on these smaller problems.
+* **When to use it:** This is your precision tool. Use it for small-to-medium sized "gaps" between anchors (e.g., `N+M < hugeDiffThreshold`).
+* **Advantages:** 100% accurate (finds the shortest possible list of edits).
+* **Disadvantages:** Can be computationally expensive. Its performance is `O(ND)`, where `D` is the number of differences. In worst-case scenarios (low similarity), `D` approaches `N`, and performance degrades to `O(N^2)`.
 
-### 2\. `engine._findAnchors(...)`
+### 2. `engine._findAnchors(...)`
 
-  * **What it is:** The L1 Anchor generation system. This is the key to high performance on large files.
-  * **Principle:** This function scans both sequences to find large, high-confidence common subsequences ("anchors"). It uses a rolling hash (`huntChunkSize`) and confidence scoring (`minAnchorConfidence`) to identify these blocks *without* running a full `O(ND)` diff.
-  * **When to use it:** Call this **first** in any custom plugin. It breaks a single, massive diff problem (e.g., 10,000 lines vs. 10,000 lines) into several small, independent diff problems (the "gaps" *between* the anchors).
-  * **Advantages:** Drastically improves performance from `O(N^2)` to something closer to `O(N)` in common cases by allowing you to skip diffing large, identical blocks.
-  * **Example:** Both `patienceDiff` and `preserveStructure` use this method immediately to find stable blocks. They then iterate over the `gaps` between the returned anchors and apply `_recursiveDiff` only to those small regions.
+* **What it is:** The L1 Anchor generation system. This is the key to high performance on large files.
+* **Principle:** This function scans both sequences to find large, high-confidence common subsequences ("anchors"). It uses a rolling hash (`huntChunkSize`) and confidence scoring (`minAnchorConfidence`) to identify these blocks *without* running a full `O(ND)` diff.
+* **When to use it:** Call this **first** in any custom plugin. It breaks a single, massive diff problem (e.g., 10,000 lines vs. 10,000 lines) into several small, independent diff problems (the "gaps" *between* the anchors).
+* **Advantages:** Drastically improves performance from `O(N^2)` to something closer to `O(N)` in common cases by allowing you to skip diffing large, identical blocks.
 
-### 3\. `engine._guidedCalculateDiff(...)`
+### 3. `engine._guidedCalculateDiff(...)`
 
-  * **What it is:** A heuristic-based, linear-time `O(N)` diff algorithm. It is **not** a Myers' algorithm.
-  * **Principle:** This is a "corridor" scan. It's a greedy algorithm that scans forward, trying to find small matches within a narrow `lookahead` window. It is **not** guaranteed to find the SES. It is designed for speed, not accuracy.
-  * **When to use it:** Use this for "chaotic" or very low-similarity gaps where `N+M > hugeDiffThreshold`. In such cases, finding a precise SES is computationally infeasible, and a "good enough" linear-time result is preferable to crashing or freezing.
-  * **Advantages:** Extremely fast, `O(N)`. Prevents catastrophic performance degradation on worst-case inputs.
-  * **Disadvantages:** Fails badly on moved or swapped blocks. It's designed for massive, contiguous additions, deletions, or replacements.
-  * **Example:** The default `commonSES` strategy *falls back* to this method if it encounters a gap that is too large for `_recursiveDiff`.
+* **What it is:** A heuristic-based, linear-time `O(N)` diff algorithm. It is **not** a Myers' algorithm.
+* **Principle:** This is a "corridor" scan. It's a greedy algorithm that scans forward, trying to find small matches within a narrow `lookahead` window. It is **not** guaranteed to find the SES. It is designed for speed, not accuracy.
+* **When to use it:** Use this for "chaotic" or very low-similarity gaps where `N+M > hugeDiffThreshold`. In such cases, finding a precise SES is computationally infeasible, and a "good enough" linear-time result is preferable to crashing or freezing.
+* **Advantages:** Extremely fast, `O(N)`. Prevents catastrophic performance degradation on worst-case inputs.
+* **Disadvantages:** Fails badly on moved or swapped blocks. It's designed for massive, contiguous additions, deletions, or replacements.
 
-### 4\. `engine._createDeletions(...)` / `engine._createAdditions(...)`
+### 4. `engine._createDeletions(...)` / `engine._createAdditions(...)`
 
-  * **What it is:** Simple utility functions for "flushing" tokens.
-  * **Principle:** They iterate over a token range (`start` to `end`) and create a `DiffResult` array, marking every single token as `DiffOperation.REMOVE` or `DiffOperation.ADD`.
-  * **When to use it:** Use these to "flush" remaining tokens at the beginning or end of your logic. For example, if your plugin processes all anchors and gaps, and you are left with a final un-matched range at the end of the old file, you would pass it to `_createDeletions`.
-  * **Example:**
-    ```typescript
-    // We've processed everything else, now just delete the rest
-    const remainingDeletions = engine._createDeletions(oldTokens, lastOldPos, oldEnd, idToString);
-    results.push(...remainingDeletions);
-    ```
+* **What it is:** Simple utility functions for "flushing" tokens.
+* **Principle:** They iterate over a token range (`start` to `end`) and create a `DiffResult` array, marking every single token as `DiffOperation.REMOVE` or `DiffOperation.ADD`.
+* **When to use it:** Use these to "flush" remaining tokens at the beginning or end of your logic. For example, if your plugin processes all anchors and gaps, and you are left with a final un-matched range at the end of the old file, you would pass it to `_createDeletions`.
 
------
+---
 
 ## Core API (`MyersCoreDiff`)
 
@@ -203,40 +221,29 @@ The main method.
 * `debug?: boolean`: (default `false`) Enables verbose logging to the console.
 * `options?: DiffOptions`: Configuration object.
 
-**Example of using options:**
-
-You can control the diff engine's behavior by passing the `options` object.
+**Example:**
 
 ```typescript
 import { MyersCoreDiff, registerPatienceDiffStrategy, type DiffOptions } from '@fishan/myers-core-diff';
 
-// Register a strategy to use it by name
 registerPatienceDiffStrategy(MyersCoreDiff);
 const differ = new MyersCoreDiff();
 
-// 1. Define your options
 const options: DiffOptions = {
-  // Use the 'patienceDiff' plugin
   diffStrategyName: 'patienceDiff',
-  
-  // Ignore small matches, look for bigger blocks
-  minMatchLength: 10, 
-  
-  // Don't use the heuristic fallback
+  minMatchLength: 10,
   hugeDiffThreshold: 100000,
-  
-  // Don't use global anchors
-  useAnchors: false 
+  useAnchors: false
 };
 
-// 2. Pass them to the diff method
 const result = differ.diff(oldCode, newCode, false, options);
+```
 
 ### `MyersCoreDiff.registerStrategy(name, strategyFn)`
 
 Static method to register a new plugin strategy.
 
------
+---
 
 ## Options (`DiffOptions`)
 
@@ -244,7 +251,7 @@ You can pass these options into the `diff()` method:
 
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `diffStrategyName` | `string` | `'commonSES'` | **(v6.0)** The name of the strategy plugin to use. |
+| `diffStrategyName` | `string` | `'commonSES'` | The name of the strategy plugin to use. |
 | `minMatchLength` | `number` | `30` | Minimum token length for an L1 anchor. |
 | `quickDiffThreshold` | `number` | `64` | N+M threshold below which to use quick O(ND) diff. |
 | `hugeDiffThreshold` | `number` | `256` | N+M gap threshold above which to use `_guidedCalculateDiff`. |
@@ -253,29 +260,28 @@ You can pass these options into the `diff()` method:
 | `skipTrimming` | `boolean` | `false` | Skip trimming common prefixes/suffixes. |
 | `jumpStep` | `number` | `30` | (For `_findAnchors`) Scan step when searching for anchors. |
 | `huntChunkSize` | `number` | `10` | (For `_findAnchors`) Chunk size for hashing. |
-| `minAnchorConfidence` | `number` | `0.8` | (For `_findAnchors`) Minimum anchor confidence (0.0 - 1.0). |
+| `minAnchorConfidence` | `number` | `0.8` | (For `_findAnchors`) Minimum anchor confidence (0.0–1.0). |
 | `useAnchors` | `boolean` | `true` | Whether to use L1 anchors (global search). |
 | `localLookahead` | `number` | `50` | (For `preserveStructure`) How far to search for L2 (positional) anchors. |
-| `anchorSearchMode` | `'floating'` | `'positional'` | `'combo'` | `'combo'` | L1 anchor search mode. |
+| `anchorSearchMode` | `'floating' \| 'positional' \| 'combo'` | `'combo'` | L1 anchor search mode. |
 | `positionalAnchorMaxDrift` | `number` | `20` | (For `positional` mode) Max drift for an L1 positional anchor. |
 
------
+---
 
 ## Test Suite
 
-The engine is validated by a comprehensive suite of 126 tests, designed to ensure correctness, reliability, and performance from the lowest-level primitives to the high-level strategy plugins.
+The engine is validated by a comprehensive suite of **126 tests**, designed to ensure correctness, reliability, and performance—from the lowest-level primitives to the high-level strategy plugins.
 
 The test methodology is built on three pillars:
 
-White-Box (Direct) Tests: These tests directly invoke internal, non-public methods of the "Toolbox" (like _findMiddleSnake and _guidedCalculateDiff). This ensures that the core building blocks are numerically stable, correct, and handle edge cases (e.g., odd/even deltas, changes at the very beginning/end) as expected, independent of the high-level API.
+- **White-Box (Direct) Tests**: Validate internal primitives like `_findMiddleSnake`.
+- **Black-Box (Unit) Tests**: Assert exact diff output matches expected snapshots.
+- **Black-Box (Functional) Tests**: Apply the diff as a patch and verify the result matches the expected new content byte-for-byte.
 
-Black-Box (Unit) Tests: These tests call the public diff() method and compare its output exactly against a known, pre-defined "snapshot" of the expected DiffResult array. This is used to verify simple, predictable scenarios (simple additions, deletions, replacements) and guarantee that the diff output itself is correct.
+All tests are run for each built-in strategy (`commonSES`, `patienceDiff`, `preserveStructure`) to guarantee production readiness.
 
-Black-Box (Functional) Tests: This is the most critical test category. These tests do not inspect the DiffResult. Instead, they apply the generated diff as a patch to the "old" content and assert that the result is an exact, byte-for-byte match of the "new" content. This verifies real-world correctness and ensures that the diff is "round-trip" safe, even for complex scenarios like block moves, binary data, and complete rewrites.
-
-This entire test battery (Unit and Functional) is run separately for the default strategy (commonSES) and for each built-in plugin (patienceDiff, preserveStructure) to guarantee that all provided strategies are production-ready.
-
-\<details\>\<summary\>\<b\>View Test Results (126 passing)\</b\>\</summary\>
+<details>
+<summary><b>View Test Results (126 passing)</b></summary>
 
 ```bash
   Direct Test: _findMiddleSnake
@@ -318,23 +324,6 @@ This entire test battery (Unit and Functional) is run separately for the default
     ✔ should correctly handle a simple block swap
     ✔ should correctly handle a complete replacement
     ✔ should correctly handle a block move operation
-
-  Direct Test: _findMiddleSnake
-    ✔ should find a snake in a large, complete replacement scenario
-
-  Direct Test: _guidedCalculateDiff
-    ✔ should handle huge additions
-    ✔ should handle huge deletions
-    ✔ should handle a chaotic mix of small changes in a large string
-
-  Direct Test: calculateDiff
-    ✔ should handle simple insertion
-    ✔ should handle simple deletion
-    ✔ should handle simple substitution
-    ✔ should handle empty old string
-    ✔ should handle empty new string
-    ✔ should handle identical strings
-    ✔ should handle reversed string
 
   MyersDiff Functional Tests (Patch Correctness)
     ✔ should handle simple addition
@@ -379,17 +368,9 @@ This entire test battery (Unit and Functional) is run separately for the default
     ✔ should handle interleaved changes
     ✔ should handle large block deletion from the middle
 
-  MyersDiff: Direct _findMiddleSnake Invocation Tests
-    ✔ should find a snake in the "Swapped Blocks" scenario that was failing
-    ✔ should find a snake in the "Complete Replacement" scenario that was failing
-
-  MyersDiff: Direct _findMiddleSnake Invocation Tests
-    ✔ should find the middle snake in a complex replacement scenario
-
   MyersDiff: Middle Snake Stress Tests
     ✔ should correctly handle a large block replacement in the middle
     ✔ should correctly handle moving a large block of tokens
-    Words: 345, Hits: 21, Misses: 298, Confidence: 0.07, Anchors: 0
     ✔ should correctly handle multiple small interleaved changes in a large file
     ✔ should handle a complete rewrite of one large file to another
     ✔ should handle deleting large blocks from multiple locations
@@ -416,33 +397,19 @@ This entire test battery (Unit and Functional) is run separately for the default
 
   MyersDiff Functional Tests (Patch correctness) - Strategy: preserveStructure
     ✔ should handle simple addition
-    Values: - (0) vs + (1)
     ✔ should handle simple deletion
-    Values: - (1) vs + (0)
     ✔ should handle simple replacement
-    Values: - (1) vs + (1)
     ✔ should handle whitespace-only line replacement
-    Values: - (1) vs + (1)
     ✔ should handle move (complex change) - expecting correct reconstruction
-    Values: - (20) vs + (20)
     ✔ should handle multiple non-contiguous modifications
-    Values: - (5) vs + (5)
     ✔ should handle changes involving only whitespace (indentation)
-    Values: - (1) vs + (1)
     ✔ should handle complete rewrite
-    Values: - (121) vs + (121)
     ✔ should handle deletion of all content
-    Values: - (121) vs + (0)
     ✔ should handle creation from empty
-    Values: - (0) vs + (121)
     ✔ should handle changes with unicode characters
-    Values: - (4) vs + (4)
     ✔ should return no changes for identical inputs
-    Values: - (0) vs + (0)
     ✔ should prioritize local change over larger replacement
-    Values: - (2) vs + (2)
     ✔ should handle a moved block of tokens (Block Move test case)
-    Values: - (6) vs + (6)
 
   MyersDiff Unit Tests (Exact Match) - Strategy: preserveStructure
     ✔ should handle simple addition (unit)
@@ -451,22 +418,21 @@ This entire test battery (Unit and Functional) is run separately for the default
     ✔ should handle indentation change (unit - expecting line replace)
     ✔ should prioritize local change over larger replacement (unit)
 
-
   126 passing (275ms)
 ```
 
-\</details\>
+</details>
 
------
+---
 
 ## License
 
 MIT © Aleks Fishan
 
-\<details\>
-\<summary\>View License Text\</summary\>
+<details>
+<summary>View License Text</summary>
 
-```
+```text
 MIT License
 
 Copyright (c) 2025 Aleks Fishan
@@ -482,7 +448,7 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOTT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
 AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
@@ -490,4 +456,5 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-\</details\>
+</details>
+```
