@@ -1,0 +1,45 @@
+{
+	"name": "@fishan/myers-core-diff",
+	"version": "1.0.0",
+	"description": "A high-performance core diff engine based on Myers' algorithm, with plugin support for custom strategies (e.g., Patience, Preserve Structure).",
+	"main": "dist/index.js",
+	"type": "module",
+	"types": "dist/index.d.ts",
+	"author": "Aleks Fishan a.fishan@gmail.com",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/fishan/myers-core-diff.git"
+	},
+	"homepage": "https://github.com/fishan/myers-core-diff#readme",
+	"bugs": {
+		"url": "https://github.com/fishan/myers-core-diff/issues"
+	},
+	"scripts": {
+		"test": "mocha --bail",
+		"clean": "rimraf dist",
+		"build:ts": "tsc -p tsconfig.build.json",
+		"build": "npm run clean && npm run build:ts",
+		"prepublishOnly": "npm run build"
+	},
+	"files": [
+		"dist"
+	],
+	"keywords": [
+		"diff",
+		"myers",
+		"myers-diff",
+        "preserve-structure-diff",
+		"patience-diff",
+		"diff-core",
+		"diff-engine",
+		"typescript"
+	],
+	"devDependencies": {
+		"@types/mocha": "^10.0.10",
+		"mocha": "^11.7.2",
+		"rimraf": "^5.0.10",
+		"ts-node": "^10.9.2",
+		"typescript": "^5.9.2"
+	}
+}
