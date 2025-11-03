@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "@fishan/myers-core-diff": ["./src/index.ts"]
+    }
+  }
+}

@@ -1,10 +1,16 @@
 {
 	"name": "@fishan/myers-core-diff",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "A high-performance core diff engine based on Myers' algorithm, with plugin support for custom strategies (e.g., Patience, Preserve Structure).",
 	"main": "dist/index.js",
 	"type": "module",
 	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": "./dist/index.js",
+			"types": "./dist/index.d.ts"
+		}
+	},
 	"author": "Aleks Fishan a.fishan@gmail.com",
 	"license": "MIT",
 	"repository": {
@@ -16,12 +22,15 @@
 		"url": "https://github.com/fishan/myers-core-diff/issues"
 	},
 	"scripts": {
-		"test": "mocha --bail",
-		"clean": "rimraf dist",
-		"build:ts": "tsc -p tsconfig.build.json",
-		"build": "npm run clean && npm run build:ts",
-		"prepublishOnly": "npm run build"
-	},
+        "test": "npm run test:prod",
+        "test:prod": "npm run build && mocha --bail --config .mocharc.cjs",
+        "test:dev": "cross-env TS_NODE_PROJECT=tsconfig.test.json mocha --bail --config .mocharc.cjs",
+        "clean": "rimraf dist",
+        "build:js": "esbuild src/*.ts --outdir=dist --platform=node --format=esm --define:__DEV__=false --minify --drop:console",
+        "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly",
+        "build": "npm run clean && npm run build:types && npm run build:js",
+        "prepublishOnly": "npm run build"
+    },
 	"files": [
 		"dist"
 	],
@@ -29,7 +38,7 @@
 		"diff",
 		"myers",
 		"myers-diff",
-        "preserve-structure-diff",
+		"preserve-structure-diff",
 		"patience-diff",
 		"diff-core",
 		"diff-engine",
@@ -37,6 +46,8 @@
 	],
 	"devDependencies": {
 		"@types/mocha": "^10.0.10",
+		"cross-env": "^10.1.0",
+		"esbuild": "^0.20.0",
 		"mocha": "^11.7.2",
 		"rimraf": "^5.0.10",
 		"ts-node": "^10.9.2",

@@ -1,7 +1,14 @@
 // test/myers_middle_snake.test.ts
 import { suite, test } from 'mocha';
 import * as assert from 'assert';
-import { MyersCoreDiff, DiffOperation, type DiffResult } from '../src/myers_core_diff.js';
+import { 
+    MyersCoreDiff, 
+    DiffOperation, 
+    type DiffResult, 
+    type DiffOptions,
+    registerPatienceDiffStrategy,
+    registerPreserveStructureStrategy
+} from '@fishan/myers-core-diff';
 
 /**
  * Helper function for applying a patch.

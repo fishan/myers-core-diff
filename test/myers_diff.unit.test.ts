@@ -1,6 +1,13 @@
 import { suite, test } from 'mocha';
 import * as assert from 'assert';
-import { MyersCoreDiff, DiffOperation, DiffResult } from '../src/myers_core_diff.js';
+import { 
+    MyersCoreDiff, 
+    DiffOperation, 
+    type DiffResult, 
+    type DiffOptions,
+    registerPatienceDiffStrategy,
+    registerPreserveStructureStrategy
+} from '@fishan/myers-core-diff';
 
 suite('MyersDiff Unit Tests (Exact Match)', () => {
 

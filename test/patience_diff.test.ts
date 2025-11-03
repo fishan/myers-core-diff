@@ -1,13 +1,16 @@
 // test/patience_diff.test.ts
 import { suite, test } from 'mocha';
 import * as assert from 'assert';
-import { MyersCoreDiff, DiffOperation, type DiffResult, type DiffOptions } from '../src/myers_core_diff.js';
-// [MODIFICATION] Import the patience strategy
-import { registerPatienceDiffStrategy } from '../src/strategy_patience.js';
-// [MODIFICATION] Import the preserveStructure strategy, as patience depends on it
-import { registerPreserveStructureStrategy } from '../src/strategy_preserve.js';
+import { 
+    MyersCoreDiff, 
+    DiffOperation, 
+    type DiffResult, 
+    type DiffOptions,
+    registerPatienceDiffStrategy,
+    registerPreserveStructureStrategy
+} from '@fishan/myers-core-diff';
 
-// [MODIFICATION] Register both strategies
+// Register both strategies
 registerPatienceDiffStrategy(MyersCoreDiff);
 registerPreserveStructureStrategy(MyersCoreDiff); // <-- IMPORTANT: Patience now depends on Preserve
 
@@ -32,7 +35,7 @@ const applyPatch = (oldTokens: string[], patch: DiffResult[]): string[] => {
     return result;
 };
 
-// [MODIFICATION] Helper function for running patienceDiff tests
+//  Helper function for running patienceDiff tests
 const runPatienceDiffTest = (
     title: string,
     oldStr: string,
@@ -44,7 +47,7 @@ const runPatienceDiffTest = (
         const oldTokens = oldStr.split('\n'); // Use lines as tokens
         const newTokens = newStr.split('\n');
         
-        // [MODIFICATION] Specify the 'patienceDiff' strategy
+        // Specify the 'patienceDiff' strategy
         const options: DiffOptions = { 
             diffStrategyName: 'patienceDiff',
         };
@@ -193,7 +196,6 @@ suite('MyersDiff Unit Tests (Exact Match) - Strategy: patienceDiff', () => {
         ]
     );
 
-    // [MODIFICATION v1.2] Updated expected patch order for replacement.
     // The fallback logic (L2/L3/L4) generates [ADD, REMOVE].
     // Both orders are functionally correct.
     runPatienceDiffTest(
@@ -202,13 +204,13 @@ suite('MyersDiff Unit Tests (Exact Match) - Strategy: patienceDiff', () => {
         'line1\nnew\nline3',
         [
             [DiffOperation.EQUAL, 'line1'],
-            [DiffOperation.ADD, 'new'],     // <--- [FIXED] Actual order
-            [DiffOperation.REMOVE, 'old'], // <--- [FIXED] Actual order
+            [DiffOperation.ADD, 'new'],   
+            [DiffOperation.REMOVE, 'old'], 
             [DiffOperation.EQUAL, 'line3']
         ]
     );
     
-    // [NEW TEST] This is a specific test for patienceDiff.
+    // This is a specific test for patienceDiff.
     // It verifies that `patience` correctly identifies
     // the move of block `B` after `C`.
     runPatienceDiffTest(

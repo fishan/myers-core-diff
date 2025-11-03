@@ -402,12 +402,12 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
     const lakeSize = (oldEnd - oldStart) + (newEnd - newStart);
     let anchorChain: Anchor[] = []; // L1 global anchors
 
-    // --- Шаг 1: Поиск Глобальных L1 Якорей (как в commonSES) ---
+    // --- Step 1: Search for Global L1 Anchors (as in commonSES) ---
     if (config.useAnchors && lakeSize > config.quickDiffThreshold) {
         if (__DEV__ && debug) console.log(`[🧬 L1] Lake large enough (${lakeSize}). Searching for global anchors...`);
         const l1Config: Required<DiffOptions> = {
-            ...config, // Берем основу из главного конфига
-            ...preserveStructureL1AnchorConfig // Переопределяем L1 настройками
+            ...config, 
+            ...preserveStructureL1AnchorConfig 
         };
 
         const foundAnchors = engine._findAnchors(
@@ -421,9 +421,9 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
 
     const result: DiffResult[] = [];
 
-    // --- Шаг 2: Обработка на основе L1 якорей ---
+    // --- Step 2: Processing based on L1 anchors ---
     if (anchorChain.length > 0) {
-        // --- Путь A: L1 Якоря найдены ---
+        // --- Path A: L1 Anchors found ---
         if (__DEV__ && debug) {
             console.log(`[🧬 L1] Found ${anchorChain.length} global anchors. Processing gaps between them using L2/L3/L4 logic.`);
         }
@@ -431,10 +431,10 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
         let currentNewPos = newStart;
 
         for (const anchor of anchorChain) {
-            // 2.A.1: Обработка разрыва ДО L1 якоря с помощью L2/L3/L4
+            // 2.A.1: Process gap BEFORE L1 anchor using L2/L3/L4
             if (anchor.oldPos > currentOldPos || anchor.newPos > currentNewPos) {
                  if (__DEV__ && debug) console.log(`[🧬 L1->L2] Processing gap before anchor old[${currentOldPos}, ${anchor.oldPos}) new[${currentNewPos}, ${anchor.newPos}) -> _processRangeWithLocalAnchors`);
-                const gapResult = _processRangeWithLocalAnchors( // Вызываем хелпер
+                const gapResult = _processRangeWithLocalAnchors(
                     engine,
                     oldTokens, currentOldPos, anchor.oldPos,
                     newTokens, currentNewPos, anchor.newPos,
@@ -443,21 +443,21 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
                 result.push(...gapResult);
             }
 
-            // 2.A.2: Добавление самого L1 якоря (EQUAL блок)
+            // 2.A.2: Add the L1 anchor itself (EQUAL block)
              if (__DEV__ && debug) console.log(`[🧬 L1] Adding global anchor EQUAL block (length ${anchor.length})`);
             for (let j = 0; j < anchor.length; j++) {
                 result.push([DiffOperation.EQUAL, idToString[oldTokens[anchor.oldPos + j]]]);
             }
 
-            // Обновляем позиции
+            // Update positions
             currentOldPos = anchor.oldPos + anchor.length;
             currentNewPos = anchor.newPos + anchor.length;
         }
 
-        // 2.A.3: Обработка разрыва ПОСЛЕ последнего L1 якоря
+        // 2.A.3: Process gap AFTER the last L1 anchor
         if (currentOldPos < oldEnd || currentNewPos < newEnd) {
              if (__DEV__ && debug) console.log(`[🧬 L1->L2] Processing trailing gap old[${currentOldPos}, ${oldEnd}) new[${currentNewPos}, ${newEnd}) -> _processRangeWithLocalAnchors`);
-            const trailingGapResult = _processRangeWithLocalAnchors( // Вызываем хелпер
+            const trailingGapResult = _processRangeWithLocalAnchors(
                 engine,
                 oldTokens, currentOldPos, oldEnd,
                 newTokens, currentNewPos, newEnd,
@@ -467,8 +467,8 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
         }
 
     } else {
-        // --- Путь B: L1 Якоря НЕ найдены ---
-        // Используем оригинальную L2/L3/L4 логику для всего диапазона
+        // --- Path B: L1 Anchors NOT found ---
+        // Use original L2/L3/L4 logic for the entire range
         if (__DEV__ && debug) {
             console.log(`[🧬 L1] No global anchors found. Falling back to full range L2/L3/L4 processing -> _processRangeWithLocalAnchors`);
         }
@@ -502,7 +502,6 @@ const _strategyPreserveStructure: DiffStrategyPlugin = (
  * registerPreserveStructureStrategy(MyersCoreDiff);
  * const diff = new MyersCoreDiff({ strategy: 'preserveStructure' });
  */
-
 export function registerPreserveStructureStrategy(CoreEngine: typeof MyersCoreDiff): void {
     CoreEngine.registerStrategy('preserveStructure', _strategyPreserveStructure);
 }

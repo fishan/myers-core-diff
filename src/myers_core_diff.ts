@@ -23,26 +23,23 @@ export enum DiffOperation {
  * Represents a single operation in the diff result.
  * It's a tuple where the first element is the operation type
  * and the second is the string content (token).
+ * @example [DiffOperation.EQUAL, 'some text']
  */
 export type DiffResult = [DiffOperation, string];
 
-// Internal interfaces for the jsdiff-style algorithm implementation.
-interface DraftChangeObject {
-	op: DiffOperation;
-	count: number;
-	previousComponent?: DraftChangeObject;
-}
-
-interface Path {
-	oldPos: number;
-	lastComponent?: DraftChangeObject;
-}
-
-// Data structure for the result of the middle snake search.
+/**
+ * Data structure for the result of the middle snake search.
+ * Represents the overlapping region found by the forward and backward searches.
+ * @internal
+ */
 interface MiddleSnake {
+	/** Start X coordinate (position in oldTokens) of the snake. */
 	x: number;
+	/** Start Y coordinate (position in newTokens) of the snake. */
 	y: number;
+	/** End U coordinate (position in oldTokens) of the snake. */
 	u: number;
+	/** End V coordinate (position in newTokens) of the snake. */
 	v: number;
 }
 
@@ -50,44 +47,56 @@ interface MiddleSnake {
  * Configuration options for the diff algorithm.
  */
 export interface DiffOptions {
-	/** [v6.0] The name of the diffing strategy plugin to use. */
+	/** The name of the diffing strategy plugin to use. */
 	diffStrategyName?: string;
-	/** The minimum length of a match to be considered valid. */
+	/** The minimum length of a match to be considered a valid anchor. */
 	minMatchLength?: number;
-	/** The threshold for switching to a faster, less precise diff algorithm for small changes. */
+	/** The threshold (N+M) for switching to a faster, less precise diff algorithm for small changes. */
 	quickDiffThreshold?: number;
-	/** The threshold for using optimizations geared towards very large differences. */
+	/** The threshold (N+M) for using optimizations (like _guidedCalculateDiff) for very large differences. */
 	hugeDiffThreshold?: number;
-	/** How far ahead to look for potential matches when guiding the diff algorithm. */
+	/** How far ahead to look for potential matches when guiding the diff algorithm (_guidedCalculateDiff). */
 	lookahead?: number;
-	/** The width of the "corridor" to search within around the main diagonal. */
+	/** The width of the "corridor" to search within around the main diagonal (_guidedCalculateDiff). */
 	corridorWidth?: number;
 	/** If true, skips the initial trimming of common prefixes and suffixes. */
 	skipTrimming?: boolean;
-	/** */
+	/** (For _findAnchors) Scan step when searching for anchors. */
 	jumpStep?: number;
-	/** */
+	/** (For _findAnchors) Chunk size for hashing. */
 	huntChunkSize?: number
-	/** */
+	/** (For _findAnchors) Minimum anchor confidence (0.0–1.0). */
 	minAnchorConfidence?: number;
-	/** */
+	/** Whether to use L1 anchors (global search). */
 	useAnchors?: boolean;
 	/** If true, the diff algorithm will prioritize preserving the positions of equal tokens. (Used by strategies) */
 	preservePositions?: boolean;
-	/** */
+	/** (For stable diff) Threshold for using full diff on small gaps vs. simple add/remove. */
 	localgap?: number;
-	/** */
+	/** (For stable diff) How far to search for L2 (positional) anchors. */
 	localLookahead?: number;
-	/** */
+	/** (For _findAnchors) L1 anchor search mode. */
 	anchorSearchMode?: 'floating' | 'positional' | 'combo';
-	/** */
+	/** (For 'positional' mode) Max drift for an L1 positional anchor. */
 	positionalAnchorMaxDrift?: number;
 
 }
 
 /**
- * [v6.0] Defines the interface (contract) for a diff strategy plugin.
+ * Defines the interface (contract) for a diff strategy plugin.
  * A plugin receives the diff engine instance to access its "Toolbox" of algorithms.
+ *
+ * @param engine The engine instance for accessing the Toolbox.
+ * @param oldTokens The tokenized 'old' sequence.
+ * @param oldStart The start index for diffing in oldTokens.
+ * @param oldEnd The end index (exclusive) for diffing in oldTokens.
+ * @param newTokens The tokenized 'new' sequence.
+ * @param newStart The start index for diffing in newTokens.
+ * @param newEnd The end index (exclusive) for diffing in newTokens.
+ * @param idToString A map to convert token IDs back to strings.
+ * @param config The fully resolved diff configuration.
+ * @param debug A flag to enable verbose logging.
+ * @returns An array of DiffResult tuples.
  */
 export type DiffStrategyPlugin = (
 	engine: MyersCoreDiff, // The engine instance for accessing the Toolbox
@@ -105,11 +114,17 @@ export type DiffStrategyPlugin = (
  * @internal
  */
 export interface Anchor {
+	/** The starting position in the 'old' sequence. */
 	oldPos: number;
+	/** The starting position in the 'new' sequence. */
 	newPos: number;
+	/** The length of the matching block. */
 	length: number;
+	/** The absolute positional difference (Math.abs(newPos - oldPos)). */
 	driftDistance: number;
+	/** The drift distance relative to the anchor length. */
 	driftRatio: number;
+	/** A confidence score (0.0 - 1.0) for this anchor. */
 	confidence: number;
 }
 
@@ -118,9 +133,13 @@ export interface Anchor {
  * @internal
  */
 interface GapInfo {
+	/** The start index of the gap in the 'old' sequence. */
 	oldStart: number;
+	/** The end index (exclusive) of the gap in the 'old' sequence. */
 	oldEnd: number;
+	/** The start index of the gap in the 'new' sequence. */
 	newStart: number;
+	/** The end index (exclusive) of the gap in the 'new' sequence. */
 	newEnd: number;
 }
 
@@ -190,6 +209,7 @@ class RollingHash {
 	 * @param a - The base.
 	 * @param b - The exponent.
 	 * @returns The result of (a^b % M).
+	 * @private
 	 */
 	private _power(a: number, b: number): number {
 		const M = this.M;
@@ -207,6 +227,7 @@ class RollingHash {
 	/**
 	 * Calculates the initial hash for the first window of tokens.
 	 * @returns The initial hash value.
+	 * @private
 	 */
 	private _calculateInitialHash(): number {
 		const M = this.M;
@@ -274,14 +295,11 @@ class RollingHash {
  * ```
  */
 export class MyersCoreDiff {
-
 	declare static __DEV__: boolean;
-
 	private static strategyRegistry = new Map<string, DiffStrategyPlugin>();
     private static isDefaultRegistered = false;
-
 	public static readonly defaultOptions: Required<DiffOptions> = {
-		diffStrategyName: 'commonSES', // [v6.0] Default strategy
+		diffStrategyName: 'commonSES', // Default strategy
 		minMatchLength: 30,
 		quickDiffThreshold: 64,
 		hugeDiffThreshold: 256,
@@ -299,6 +317,15 @@ export class MyersCoreDiff {
 		positionalAnchorMaxDrift: 20,
 	};
 
+	/**
+	 * Ensures that the default 'commonSES' strategy is registered.
+	 * This method is idempotent and will only register the strategy once,
+	 * using the provided instance to correctly bind 'this' for the method.
+	 *
+	 * @param instance - The MyersCoreDiff instance to which the strategy function will be bound.
+	 * @private
+	 * @static
+	 */
 	private static ensureDefaultStrategyRegistered(instance: MyersCoreDiff): void {
         // Register only if the flag is not set
         if (!MyersCoreDiff.isDefaultRegistered) {
@@ -313,9 +340,11 @@ export class MyersCoreDiff {
 	
 
 	/**
-	 * [v6.0] Registers a new diffing strategy plugin with the Core Engine.
+	 * Registers a new diffing strategy plugin with the Core Engine.
 	 * @param name The name of the strategy (e.g., 'preserveStructure').
 	 * @param strategyFn The function implementing the DiffStrategyPlugin interface.
+	 * @public
+	 * @static
 	 */
 	public static registerStrategy(name: string, strategyFn: DiffStrategyPlugin): void {
 		if (__DEV__) {
@@ -325,14 +354,15 @@ export class MyersCoreDiff {
 	}
 
 	/**
-	 * [v6.0] Initializes the Core Engine and registers built-in strategies.
+	 * Initializes the Core Engine and registers built-in strategies.
+	 * @public
 	 */
 	constructor() {
 		MyersCoreDiff.ensureDefaultStrategyRegistered(this);
 	}
 
 	/**
-	 * [v6.0] Computes the difference using the "Dispatcher" logic.
+	 * Computes the difference using the "Dispatcher" logic.
 	 *
 	 * This method performs setup (tokenization, trimming) and then delegates
 	 * the core diffing logic to the selected "Strategy Plugin" from the
@@ -343,6 +373,7 @@ export class MyersCoreDiff {
 	 * @param debug - (Internal) Enables verbose logging for debugging purposes.
 	 * @param options - Optional configuration, including `diffStrategyName`.
 	 * @returns An array of DiffResult tuples representing the edit script.
+	 * @public
 	 */
 	public diff(
 		oldTokens: string[],
@@ -353,16 +384,14 @@ export class MyersCoreDiff {
 		const config: Required<DiffOptions> = {
 			...MyersCoreDiff.defaultOptions,
 			...options,
-		};
-
-		
+		};		
 
 		if (__DEV__ && debug) {
 			console.group(`[diff] START (Dispatcher)`);
 			console.log(`Options:`, config);
 		}
 
-		// --- 1. Подготовка (Токенизация и Тримминг) ---
+		// --- 1. Preparation (Tokenization and Trimming) ---
 		const { hashedOld, hashedNew, idToString } = this._tokenize(oldTokens, newTokens, debug);
 
 		let prefix: DiffResult[] = [];
@@ -386,29 +415,29 @@ export class MyersCoreDiff {
 			newNewEnd = trimmed.newNewEnd;
 		}
 
-		// --- 2. Определение Стратегии ---
+		// --- 2. Strategy Definition ---
 		const strategyName = config.diffStrategyName;
 
 		if (__DEV__ && debug) {
 			console.log(`[diff] Dispatching to strategy: '${strategyName}'`);
 		}
 
-		// --- 3. Поиск Плагина ---
+		// --- 3. Plugin Lookup ---
 		const strategyFn = MyersCoreDiff.strategyRegistry.get(strategyName);
 
 		if (!strategyFn) {
-			throw new Error(`[MyersCoreDiff] Стратегия '${strategyName}' не зарегистрирована.`);
+			throw new Error(`[MyersCoreDiff] Strategy '${strategyName}' is not registered.`);
 		}
 
-		// --- 4. Вызов Плагина (передаем 'this' как "Движок") ---
+		// --- 4. Plugin Invocation (passing 'this' as the "Engine") ---
 		const body = strategyFn(
-			this, // Инстанс "Движка"
+			this, // The "Engine" instance"
 			hashedOld, newOldStart, newOldEnd,
 			hashedNew, newNewStart, newNewEnd,
 			idToString, config, debug
 		);
 
-		// --- 5. Сборка ---
+		// --- 5. Assembly ---
 		if (__DEV__ && debug) {
 			console.log(`[diff] FINISH (Dispatcher). Total result length: ${prefix.length + body.length + suffix.length}`);
 			console.groupEnd();
@@ -418,10 +447,22 @@ export class MyersCoreDiff {
 	}
 
 	/**
-     * [v6.1 - Corrected] Built-in plugin strategy "commonSES".
+     * Built-in plugin strategy "commonSES".
      * Implements the classic cdiff logic optimized for SES,
      * but *retains* the ability to use _calculateStableDiff if
-     * config.preservePositions is true (preserving original behavior).
+     * config.preservePositions is true.
+	 * @param engine - The engine instance (unused, `this` is used).
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @private
      */
 	private _strategycommonSES(
         engine: MyersCoreDiff, // engine parameter is convention, 'this' is used internally
@@ -503,8 +544,9 @@ export class MyersCoreDiff {
     }
 
 	/**
-	 * [v6.0] Finds anchors (significant matching blocks) between old and new token sequences.
+	 * [TOOLBOX] Finds anchors (significant matching blocks) between old and new token sequences.
 	 * These anchors help guide the diffing process by identifying stable regions.
+	 *
 	 * @param oldTokens - The original array of token IDs.
 	 * @param oldStart - The starting index in the oldTokens array.
 	 * @param oldEnd - The ending index (exclusive) in the oldTokens array.
@@ -514,18 +556,18 @@ export class MyersCoreDiff {
 	 * @param config - The diff options configuration.
 	 * @param debug - Enables verbose logging for debugging purposes.
 	 * @returns An array of Anchor objects representing the found anchors.
+	 * @public
 	 */
-
 	public _findAnchors(
         oldTokens: Uint32Array, oldStart: number, oldEnd: number,
         newTokens: Uint32Array, newStart: number, newEnd: number,
-        config: Required<DiffOptions>, // Включает anchorSearchMode и positionalAnchorMaxDrift
+        config: Required<DiffOptions>, 
         debug: boolean
     ): Anchor[] {
-        // --- Настройки и Подготовка ---
-        const anchorSearchMode = config.anchorSearchMode ?? 'combo'; // Режим фильтрации
-        const maxDrift = config.positionalAnchorMaxDrift; // Порог для позиционных
-        const { jumpStep, huntChunkSize, minMatchLength, minAnchorConfidence } = config; // Параметры поиска
+        // --- Settings and Preparation ---
+        const anchorSearchMode = config.anchorSearchMode ?? 'combo'; // Filtration mode
+        const maxDrift = config.positionalAnchorMaxDrift; // Positional anchor drifting limit
+        const { jumpStep, huntChunkSize, minMatchLength, minAnchorConfidence } = config; //Search params
 
         if (__DEV__ && debug) {
             console.log(`\n--- [_findAnchors v6.4 START with FILTERING] ---`);
@@ -537,26 +579,26 @@ export class MyersCoreDiff {
         const lakeOldLen = oldEnd - oldStart;
         const lakeNewLen = newEnd - newStart;
 
-        // Автоотключение для маленьких озер
+        // Auto shutoff for small lakes
         if (lakeOldLen + lakeNewLen < config.quickDiffThreshold) {
             if (__DEV__ && debug) console.log(`[_findAnchors] Skipping - lake too small (${lakeOldLen + lakeNewLen} < ${config.quickDiffThreshold}).`);
             return [];
         }
-        // Проверка валидности параметров поиска
+        // Search parameter validation check
         if (huntChunkSize <= 0 || minMatchLength < huntChunkSize) {
              if (__DEV__ && debug) console.log(`[_findAnchors] Skipping - invalid params (huntChunkSize=${huntChunkSize}, minMatchLength=${minMatchLength}).`);
              return [];
         }
 
-        const anchors: Anchor[] = []; // Массив для сбора ВСЕХ найденных якорей
-        const usedNewPos = new Uint8Array(newTokens.length); // Единая маска для newTokens
+        const anchors: Anchor[] = []; // Array for collecting ALL found anchors
+        const usedNewPos = new Uint8Array(newTokens.length); // Unified mask for newTokens
 
-        // --- Основной Поиск (Роллинг-хэш + Охота) ---
+        // --- Main Search (Rolling Hash + Hunting) --
         const newHashes = new Map<number, { pos: number }[]>();
         const rh = new RollingHash(new Uint32Array(0), 0);
         const newLen = newEnd - newStart;
 
-        // Строим хэш-таблицу для newTokens
+        // Building a hash table for newTokens
         if (newLen >= huntChunkSize) {
             for (let i = 0; i <= newLen - huntChunkSize; i += 1) {
                 const pos = newStart + i;
@@ -573,7 +615,6 @@ export class MyersCoreDiff {
         } else {
              if (__DEV__ && debug) console.log(`[_findAnchors] Built hash map with ${newHashes.size} unique chunks. Searching old tokens...`);
 
-            // Ищем в oldTokens
             for (let i = 0; i <= lakeOldLen - huntChunkSize; i += jumpStep) {
                 const oldPos = oldStart + i;
                 const slice = oldTokens.subarray(oldPos, oldPos + huntChunkSize);
@@ -583,9 +624,9 @@ export class MyersCoreDiff {
                 if (!potentialStarts) continue;
 
                 for (const start of potentialStarts) {
-                    if (usedNewPos[start.pos]) continue; // Пропускаем уже использованные в new
+                    if (usedNewPos[start.pos]) continue;
 
-                    // --- Охота (Hunting) ---
+                    // --- Hunting ---
                     const foundFragments: { oldPos: number; newPos: number }[] = [{ oldPos, newPos: start.pos }];
                     let currentHuntOldPos = oldPos + huntChunkSize;
                     const maxHuntJumps = 10;
@@ -613,60 +654,60 @@ export class MyersCoreDiff {
                             if (chunkFound) break;
                         }
                         if (!chunkFound) break;
-                    } // --- Конец Охоты ---
+                    } 
 
                     const huntConfidence = (successfulHunts * huntChunkSize) / minMatchLength;
 
-                    // --- Верификация и Расширение ---
+                    // --- Verification and Expansion ---
                     if (huntConfidence >= minAnchorConfidence) {
                         const firstFrag = foundFragments[0];
                         let finalLength = 0;
                         const scanOldStart = firstFrag.oldPos;
                         const scanNewStart = firstFrag.newPos;
-                        // Расширяем, пока совпадают и не заняты в new
+                        // Expand while matching and not occupied in new
                         while (
                             scanOldStart + finalLength < oldEnd &&
                             scanNewStart + finalLength < newEnd &&
-                            !usedNewPos[scanNewStart + finalLength] && // Проверяем маску при расширении
+                            !usedNewPos[scanNewStart + finalLength] && // Check mask during expansion
                             oldTokens[scanOldStart + finalLength] === newTokens[scanNewStart + finalLength]
                         ) {
                             finalLength++;
                         }
 
-                        // --- Создание Якоря ---
+                        // --- Anchor Creation ---
                         if (finalLength >= minMatchLength) {
                             const driftDistance = Math.abs(scanNewStart - scanOldStart);
                             const driftRatio = finalLength > 0 ? driftDistance / finalLength : 0;
-                            // Расчет уверенности якоря (как раньше)
+                            // Anchor confidence calculation 
                             const maxExpectedDrift = Math.max(100, Math.min(lakeOldLen, lakeNewLen) * 0.1);
-                            const driftConf = Math.max(0, 1.0 - (driftDistance / maxExpectedDrift)); // Используем Math.max для >= 0
+                            const driftConf = Math.max(0, 1.0 - (driftDistance / maxExpectedDrift)); // Using Math.max for >= 0
                             const lengthConf = Math.min(1.0, finalLength / (minMatchLength * 2));
-                            const anchorConfidence = (driftConf * 0.3 + lengthConf * 0.7); // Финальная уверенность
+                            const anchorConfidence = (driftConf * 0.3 + lengthConf * 0.7); // Final confidence
 
-                            // Добавляем якорь в общий список
+                            // Add anchor to the common list
                             const anchor: Anchor = {
                                 oldPos: scanOldStart, newPos: scanNewStart, length: finalLength,
                                 confidence: anchorConfidence, driftDistance, driftRatio
                             };
                             anchors.push(anchor);
 
-                            // Помечаем использованные позиции в new
+                            // Mark used positions in new
                             for (let k = 0; k < finalLength; k++) {
                                 if (scanNewStart + k < newTokens.length) usedNewPos[scanNewStart + k] = 1;
                             }
-                            // Перепрыгиваем найденный блок в old
+                            // Skip found block in old
                             i = (scanOldStart - oldStart) + finalLength - jumpStep;
                              if (__DEV__ && debug) console.log(`  -> ANCHOR FOUND: old=${scanOldStart}, new=${scanNewStart}, len=${finalLength}, drift=${driftDistance}, conf=${anchorConfidence.toFixed(2)}. Jumping i to ${i + jumpStep}`);
-                            break; // Прерываем поиск для текущего oldPos, т.к. нашли якорь
-                        } // --- Конец Создания Якоря ---
-                    } // --- Конец Верификации ---
+                            break; // Break search for current oldPos since anchor was found
+						} // --- End of Anchor Creation ---
+                    } // --- End of Verification ---
                 } // end loop potentialStarts
             } // end loop oldTokens
-        } // --- Конец Основного Поиска ---
+        } // --- End of Main Search ---
 
         if (__DEV__ && debug) console.log(`[_findAnchors] Initial search found ${anchors.length} raw anchors.`);
 
-        // --- Фильтрация по типу (anchorSearchMode) ---
+       	// --- Filtering by Type (anchorSearchMode) ---
         let filteredByTypeAnchors: Anchor[];
         if (anchorSearchMode === 'positional') {
             filteredByTypeAnchors = anchors.filter(a => a.driftDistance <= maxDrift);
@@ -675,11 +716,11 @@ export class MyersCoreDiff {
             filteredByTypeAnchors = anchors.filter(a => a.driftDistance > maxDrift);
              if (__DEV__ && debug) console.log(`  Filtered for 'floating' (drift > ${maxDrift}): ${filteredByTypeAnchors.length} anchors remaining.`);
         } else { // 'combo' or default
-            filteredByTypeAnchors = anchors; // Используем все
+            filteredByTypeAnchors = anchors;
              if (__DEV__ && debug) console.log(`  Mode 'combo', using all ${filteredByTypeAnchors.length} anchors for confidence check.`);
         }
 
-        // --- Финальная фильтрация по Confidence ---
+        // --- Final Filtering by Confidence ---
         const finalAnchors = filteredByTypeAnchors.filter(anchor => anchor.confidence >= minAnchorConfidence);
 
         if (__DEV__ && debug) {
@@ -687,13 +728,19 @@ export class MyersCoreDiff {
             console.log(`--- [_findAnchors v6.4 END] Returning ${finalAnchors.length} anchors ---`);
         }
 
-        return finalAnchors; // Возвращаем якоря, отфильтрованные по типу И по confidence
+        return finalAnchors; // Return anchors filtered by type AND by confidence
     }
 
 
 	/**
 	 * [TOOLBOX] Merges anchors, filters conflicts, and sorts them
-	 * to produce a final, monotonic chain.
+	 * to produce a final, monotonic chain (Longest Common Subsequence of anchors).
+	 *
+	 * @param anchors - The raw array of anchors found by `_findAnchors`.
+	 * @param config - The diff options configuration.
+	 * @param debug - Enables verbose logging for debugging purposes.
+	 * @returns A sorted and filtered array of Anchors forming a valid chain.
+	 * @public
 	 */
 	public _mergeAndFilterAnchors(
 		anchors: Anchor[],
@@ -707,14 +754,14 @@ export class MyersCoreDiff {
 
 		if (anchors.length === 0) return [];
 
-		// Сортируем по oldPos
+		// Sort by oldPos
 		anchors.sort((a, b) => a.oldPos - b.oldPos);
 
 		const n = anchors.length;
 		const dp = new Array(n).fill(0);
 		const prev = new Array(n).fill(-1);
 
-		// Динамическое программирование для поиска оптимальной цепи
+		// Dynamic programming to find the optimal chain
 		for (let i = 0; i < n; i++) {
 			const anchorI = anchors[i];
 			dp[i] = anchorI.length;
@@ -722,12 +769,12 @@ export class MyersCoreDiff {
 			for (let j = 0; j < i; j++) {
 				const anchorJ = anchors[j];
 
-				// КРИТИЧЕСКИ ВАЖНО: проверяем чтобы не было отрицательных озер
+				// CRITICALLY IMPORTANT: check that there are no negative lakes
 				const noOverlap = (anchorI.oldPos >= anchorJ.oldPos + anchorJ.length) &&
 					(anchorI.newPos >= anchorJ.newPos + anchorJ.length);
 
 				if (noOverlap) {
-					// Дополнительная проверка монотонности
+					// Additional monotonicity check
 					const monotoneInOld = anchorI.oldPos > anchorJ.oldPos;
 					const monotoneInNew = anchorI.newPos > anchorJ.newPos;
 
@@ -741,7 +788,7 @@ export class MyersCoreDiff {
 			}
 		}
 
-		// Восстанавливаем оптимальную цепь
+		// Reconstruct the optimal chain
 		let bestChainEndIndex = 0;
 		for (let i = 1; i < n; i++) {
 			if (dp[i] > dp[bestChainEndIndex]) {
@@ -757,7 +804,7 @@ export class MyersCoreDiff {
 		}
 		optimalChain.reverse();
 
-		// ВАЛИДАЦИЯ: проверяем что цепь не создаст отрицательных озер
+		// VALIDATION: check that the chain does not create negative la
 		for (let i = 1; i < optimalChain.length; i++) {
 			const prevAnchor = optimalChain[i - 1];
 			const currAnchor = optimalChain[i];
@@ -772,7 +819,7 @@ export class MyersCoreDiff {
 					console.error(`   Anchor ${i}: old[${currAnchor.oldPos}, ${currAnchor.oldPos + currAnchor.length}) new[${currAnchor.newPos}, ${currAnchor.newPos + currAnchor.length})`);
 					console.error(`   Gaps: old=${gapOld}, new=${gapNew}`);
 				}
-				// В случае проблемы возвращаем пустую цепь - лучше без якорей чем с ошибкой
+				// In case of a problem, return an empty chain - better no anchors than an error
 				return [];
 			}
 		}
@@ -788,6 +835,20 @@ export class MyersCoreDiff {
 	/**
 	 * [TOOLBOX] Processes the diff by iterating through the anchor chain
 	 * and calling `_processGap` for regions between them.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param anchors - The sorted and filtered chain of anchors.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @param depth - Recursion depth, for debugging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public _processWithAnchors(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -913,6 +974,15 @@ export class MyersCoreDiff {
 	/**
 	 * [TOOLBOX] A dispatcher that chooses the appropriate diffing strategy
 	 * for a gap, optimized for 'commonSES' (SES).
+	 *
+	 * @param gap - The GapInfo object defining the region to diff.
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public _processGap(
 		gap: GapInfo,
@@ -972,6 +1042,18 @@ export class MyersCoreDiff {
 	/**
 	 * [TOOLBOX] The core recursive implementation of the Myers diff algorithm
 	 * with the "middle snake" optimization (SES).
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public _recursiveDiff(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -1050,11 +1132,14 @@ export class MyersCoreDiff {
 				newTokens, newStart, newEnd,
 				idToString, config, debug
 			);
+
+			// alternative solution
 			// const res = this.calculateDiff(
 			// 	oldTokens, oldStart, oldEnd,
 			// 	newTokens, newStart, newEnd,
 			// 	idToString, config, debug
 			// );
+
 			if (__DEV__ && debug) {
 				console.log(`[recursiveDiff] Fallback result:`, res);
 				console.groupEnd();
@@ -1160,6 +1245,19 @@ export class MyersCoreDiff {
 	private forwardBuffer = new Int32Array(0);
 	private backwardBuffer = new Int32Array(0);
 
+	/**
+	 * Validates that the input ranges (start/end indices) are sane
+	 * and within the bounds of the token arrays.
+	 *
+	 * @param oldTokens - The 'old' token array.
+	 * @param oldStart - The start index for the 'old' range.
+	 * @param oldEnd - The end index (exclusive) for the 'old' range.
+	 * @param newTokens - The 'new' token array.
+	 * @param newStart - The start index for the 'new' range.
+	 * @param newEnd - The end index (exclusive) for the 'new' range.
+	 * @returns `true` if the ranges are valid, `false` otherwise.
+	 * @private
+	 */
 	private _validateInputs(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
 		newTokens: Uint32Array, newStart: number, newEnd: number
@@ -1169,6 +1267,20 @@ export class MyersCoreDiff {
 		return true;
 	}
 
+
+	/**
+	 * [TOOLBOX] Finds the "middle snake" for linear-memory Myers.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns A MiddleSnake object, or undefined if no overlap is found.
+	 * @public
+	 */
 	public _findMiddleSnake(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
 		newTokens: Uint32Array, newStart: number, newEnd: number,
@@ -1329,6 +1441,19 @@ export class MyersCoreDiff {
 	/**
 	 * [TOOLBOX] A fast, heuristic-based diff algorithm ("corridor diff").
 	 * Does not guarantee SES, but stays close to the diagonal.
+	 * Used as a fallback for very large or complex gaps.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public _guidedCalculateDiff(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -1349,7 +1474,7 @@ export class MyersCoreDiff {
 		const oldLen = oldEnd - oldStart;
 		const newLen = newEnd - newStart;
 
-		// 🎯 ОПТИМИЗАЦИЯ: Для абсурдно больших различий используем простое удаление + добавление
+		// OPTIMIZATION: For absurdly large differences, use simple delete + add
 		const sizeRatio = oldLen > 0 && newLen > 0
 			? Math.max(oldLen / newLen, newLen / oldLen)
 			: 0;
@@ -1380,23 +1505,23 @@ export class MyersCoreDiff {
 
 		const startDiagonal = newStart - oldStart;
 
-		// 🎯 ОПТИМИЗАЦИЯ: Адаптивная ширина коридора в зависимости от размера
+		// OPTIMIZATION: Adaptive corridor width based on size
 		const adaptiveCorridorWidth = Math.min(
 			config.corridorWidth,
 			Math.max(10, Math.floor((oldLen + newLen) / 100))
 		);
 
-		// 🎯 ОПТИМИЗАЦИЯ: Адаптивный lookahead
+		// OPTIMIZATION: Adaptive lookahead
 		const adaptiveLookahead = Math.min(
 			config.lookahead,
 			Math.max(5, Math.floor((oldLen + newLen) / 200))
 		);
 
-		// 🎯 ОПТИМИЗАЦИЯ: Ограничение итераций с запасом
+		// OPTIMIZATION: Iteration limit with padding
 		const maxIterations = oldLen + newLen + 100;
 		let iterations = 0;
 
-		// 🎯 ОПТИМИЗАЦИЯ: Early exit по прогрессу
+		// OPTIMIZATION: Early exit on progress
 		let lastProgressIteration = 0;
 		let lastOldPos = oldPos;
 		let lastNewPos = newPos;
@@ -1409,7 +1534,7 @@ export class MyersCoreDiff {
 		while (oldPos < oldEnd || newPos < newEnd) {
 			iterations++;
 
-			// Проверка на зацикливание
+			// Check for stuck loop
 			if (iterations - lastProgressIteration > stuckThreshold) {
 				if (__DEV__ && debug) {
 					console.warn(`[_guidedCalculateDiff] Stuck detected after ${iterations} iterations. Flushing remaining.`);
@@ -1423,7 +1548,7 @@ export class MyersCoreDiff {
 				break;
 			}
 
-			// Обновление прогресса
+			// Update progress
 			if (oldPos > lastOldPos || newPos > lastNewPos) {
 				lastProgressIteration = iterations;
 				lastOldPos = oldPos;
@@ -1446,7 +1571,7 @@ export class MyersCoreDiff {
 			const canRemove = oldPos < oldEnd;
 			const canAdd = newPos < newEnd;
 
-			// 🎯 ОПТИМИЗАЦИЯ: Быстрый путь для совпадений
+			// OPTIMIZATION: Fast path for matches
 			if (canRemove && canAdd && oldTokens[oldPos] === newTokens[newPos]) {
 				addOp(DiffOperation.EQUAL, idToString[oldTokens[oldPos]]);
 				oldPos++;
@@ -1465,7 +1590,7 @@ export class MyersCoreDiff {
 				continue;
 			}
 
-			// 🎯 ОПТИМИЗАЦИЯ: Проверка коридора с адаптивной шириной
+			// OPTIMIZATION: Corridor check with adaptive width
 			const currentDiagonal = newPos - oldPos;
 			const diagonalDistance = Math.abs(currentDiagonal - startDiagonal);
 
@@ -1483,7 +1608,7 @@ export class MyersCoreDiff {
 			const tokenToRemove = oldTokens[oldPos];
 			const tokenToAdd = newTokens[newPos];
 
-			// 🎯 ОПТИМИЗАЦИЯ: Lookahead с адаптивным размером
+			// OPTIMIZATION: Lookahead with adaptive size
 			let removeTokenFoundInNew = -1;
 			const lookaheadNewLimit = Math.min(newEnd, newPos + adaptiveLookahead);
 			for (let i = newPos + 1; i < lookaheadNewLimit; i++) {
@@ -1502,7 +1627,7 @@ export class MyersCoreDiff {
 				}
 			}
 
-			// 🎯 ОПТИМИЗАЦИЯ: Улучшенная эвристика выбора
+			// OPTIMIZATION: Improved heuristic choice
 			if (removeTokenFoundInNew !== -1 && addTokenFoundInOld === -1) {
 				addOp(DiffOperation.ADD, idToString[newTokens[newPos]]);
 				newPos++;
@@ -1519,7 +1644,6 @@ export class MyersCoreDiff {
 				const distanceToRemove = removeTokenFoundInNew - newPos;
 				const distanceToAdd = addTokenFoundInOld - oldPos;
 
-				// Выбираем более близкий
 				if (distanceToRemove < distanceToAdd) {
 					addOp(DiffOperation.ADD, idToString[newTokens[newPos]]);
 					newPos++;
@@ -1530,7 +1654,7 @@ export class MyersCoreDiff {
 				continue;
 			}
 
-			// 🎯 ОПТИМИЗАЦИЯ: Проверка редкости токена (более эффективная)
+			// OPTIMIZATION: Check token rarity (more efficient)
 			const isRemoveTokenRare = this._isTokenRare(tokenToRemove, oldTokens, oldPos, oldEnd, 3);
 			const isAddTokenRare = this._isTokenRare(tokenToAdd, newTokens, newPos, newEnd, 3);
 
@@ -1546,7 +1670,7 @@ export class MyersCoreDiff {
 				continue;
 			}
 
-			// 🎯 ОПТИМИЗАЦИЯ: Финальная эвристика - идем по более длинной стороне
+			// OPTIMIZATION: Final heuristic - go along the longer side
 			if ((oldEnd - oldPos) > (newEnd - newPos)) {
 				addOp(DiffOperation.REMOVE, idToString[oldTokens[oldPos]]);
 				oldPos++;
@@ -1570,7 +1694,19 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] The basic (O(ND)) Myers diff algorithm.
-	 * Finds the SES.
+	 * Finds the SES. Used for small gaps where recursion is overhead.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public calculateDiff(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -1604,21 +1740,6 @@ export class MyersCoreDiff {
 				}
 				let y = x - k;
 
-				// Если мы не на диагонали совпадения — проверим, можно ли избежать смещения
-				if (x < oldLen && y < newLen && oldTokens[oldStart + x] !== newTokens[newStart + y]) {
-					// Проверяем: а не совпадает ли СЛЕДУЮЩИЙ токен? (чтобы не ломать EQUAL)
-					const nextOld = x + 1 < oldLen ? oldTokens[oldStart + x + 1] : undefined;
-					const nextNew = y + 1 < newLen ? newTokens[newStart + y + 1] : undefined;
-
-					// Если следующие токены совпадают — значит, текущая несовместимость — это замена
-					// и мы можем смело сделать delete+insert здесь, не смещая будущее совпадение
-					if (nextOld !== undefined && nextNew !== undefined && nextOld === nextNew) {
-						// Просто пропускаем текущую пару — она будет обработана как delete+insert
-						// Ничего не делаем: алгоритм и так пойдёт по delete или insert, а EQUAL придёт на следующем шаге
-					}
-					// Иначе — продолжаем как обычно (алгоритм сам разберётся)
-				}
-				// Продвигаемся по диагонали совпадений
 				while (x < oldLen && y < newLen && oldTokens[oldStart + x] === newTokens[newStart + y]) {
 					x++;
 					y++;
@@ -1634,9 +1755,20 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] (Legacy) A stable diff algorithm that prioritizes
-	 * finding positional anchors.
+	 * finding positional anchors (L2 anchors).
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
-
     public _calculateStableDiff(
     		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
 		newTokens: Uint32Array, newStart: number, newEnd: number,
@@ -1654,16 +1786,16 @@ export class MyersCoreDiff {
 
 		while (oldPos < oldEnd && newPos < newEnd) {
 			if (oldTokens[oldPos] === newTokens[newPos]) {
-				// Локальное совпадение - добавляем EQUAL
+				// Local match - add EQUAL
 				result.push([DiffOperation.EQUAL, idToString[oldTokens[oldPos]]]);
 				oldPos++;
 				newPos++;
 			} else {
-				// Нашли несоответствие - ищем следующий локальный якорь
+				// Found a mismatch - find the next local anchor
 				const nextAnchor = this._findNextLocalAnchor(
 					oldTokens, oldPos, oldEnd,
 					newTokens, newPos, newEnd,
-					config.localLookahead || 50, // Насколько далеко искать
+					config.localLookahead || 50, // How far to look
 					debug
 				);
 
@@ -1677,7 +1809,7 @@ export class MyersCoreDiff {
 					}
 				}
 
-				// Обрабатываем gap между текущей позицией и следующим якорем
+				// Process the gap between the current position and the next anchor
 				const gapResult = this._processLocalGap(
 					oldTokens, oldPos, gapOldEnd,
 					newTokens, newPos, gapNewEnd,
@@ -1685,19 +1817,19 @@ export class MyersCoreDiff {
 				);
 				result.push(...gapResult);
 
-				// Перемещаемся к якорю
+				// Move to the anchor
 				if (nextAnchor) {
 					oldPos = nextAnchor.oldPos;
 					newPos = nextAnchor.newPos;
 				} else {
-					// Дошли до конца
+					// Reached the end
 					oldPos = oldEnd;
 					newPos = newEnd;
 				}
 			}
 		}
 
-		// Обрабатываем хвосты
+		// Process tails
 		while (oldPos < oldEnd) {
 			result.push([DiffOperation.REMOVE, idToString[oldTokens[oldPos++]]]);
 		}
@@ -1711,8 +1843,20 @@ export class MyersCoreDiff {
 
 		return result;
 	}
+	
 	/**
 	 * [TOOLBOX] Finds the next nearby positional anchor (L2 anchor).
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param lookahead - How far to search for a positional match.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns A simple object { oldPos, newPos } or null if no anchor is found.
+	 * @public
 	 */
 	public _findNextLocalAnchor(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -1723,7 +1867,7 @@ export class MyersCoreDiff {
 		const maxOldPos = Math.min(oldEnd, oldStart + lookahead);
 		const maxNewPos = Math.min(newEnd, newStart + lookahead);
 
-		// Ищем ближайшее совпадение в пределах lookahead
+		// Look for the nearest match within lookahead
 		for (let offset = 1; offset <= lookahead; offset++) {
 			const oldPos = oldStart + offset;
 			const newPos = newStart + offset;
@@ -1740,7 +1884,7 @@ export class MyersCoreDiff {
 			}
 		}
 
-		// Ищем совпадения в окрестности диагонали
+		// Look for matches near the diagonal
 		for (let radius = 1; radius <= Math.min(lookahead / 2, 10); radius++) {
 			for (let delta = -radius; delta <= radius; delta++) {
 				const oldPos = oldStart + radius;
@@ -1765,6 +1909,18 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] (Legacy) Processes a gap for `_calculateStableDiff`.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param config - The fully resolved diff configuration.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public _processLocalGap(
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
@@ -1781,9 +1937,9 @@ export class MyersCoreDiff {
 			console.log(`[_processLocalGap] Processing gap: old[${oldStart}, ${oldEnd}) new[${newStart}, ${newEnd})`);
 		}
 
-		// Для маленьких gaps используем простую стратегию
+		// For small gaps use a simple strategy
 		if (gapOldLen + gapNewLen < (config.localgap || 10)) {
-			// Просто удаляем старый блок и добавляем новый
+			// Simply remove the old block and add the new one
 			for (let i = oldStart; i < oldEnd; i++) {
 				result.push([DiffOperation.REMOVE, idToString[oldTokens[i]]]);
 			}
@@ -1791,7 +1947,7 @@ export class MyersCoreDiff {
 				result.push([DiffOperation.ADD, idToString[newTokens[i]]]);
 			}
 		} else {
-			// Для больших gaps используем обычный diff
+			// For large gaps use the normal diff
 			const gapResult = this.calculateDiff(
 				oldTokens, oldStart, oldEnd,
 				newTokens, newStart, newEnd,
@@ -1804,13 +1960,23 @@ export class MyersCoreDiff {
 	}
 
 	// =================================================================
-	// [v6.0] ВНУТРЕННИЕ (PRIVATE) ХЕЛПЕРЫ ДВИЖКА
-	// (Не являются частью "Toolbox" для плагинов)
+	// INTERNAL (PRIVATE) ENGINE HELPERS
+	// (Not part of the "Toolbox" for plugins)
 	// =================================================================
 
 	/**
 	 * Efficiently finds and separates common prefixes and suffixes from two token arrays.
 	 * This preprocessing step reduces the problem size for the main diff algorithm.
+	 *
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An object containing the prefix/suffix arrays and new trimmed indices.
 	 * @private
 	 */
 	private _trimCommonPrefixSuffix(
@@ -1887,6 +2053,11 @@ export class MyersCoreDiff {
 	 * Converts arrays of string tokens into numerical IDs to speed up comparisons.
 	 * This is a critical performance optimization, as integer comparisons are much
 	 * faster than string comparisons.
+	 *
+	 * @param oldTokens - Array of 'old' string tokens.
+	 * @param newTokens - Array of 'new' string tokens.
+	 *V @param debug - A flag to enable verbose logging.
+	 * @returns An object containing hashed arrays and the ID-to-string map.
 	 * @private
 	 */
 	private _tokenize(
@@ -1944,6 +2115,14 @@ export class MyersCoreDiff {
 	/**
 	 * Helper method to determine if a token is rare within a given range.
 	 * This is used as a heuristic in the guided diff algorithm.
+	 *
+	 * @param token - The token ID to check.
+	 * @param tokens - The array to search within.
+	 * @param startPos - The start index of the range.
+	 * @param endPos - The end index (exclusive) of the range.
+	 * @param maxOccurrences - The threshold to be considered "rare".
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns True if the token count is <= maxOccurrences, false otherwise.
 	 * @private
 	 */
 	private _isTokenRare(
@@ -1990,6 +2169,14 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] Helper function to create an array of ADD operations.
+	 *
+	 * @param tokens - The token array to read from.
+	 * @param start - The start index.
+	 * @param end - The end index (exclusive).
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of ADD DiffResult tuples.
+	 * @public
 	 */
 	public _createAdditions(
 		tokens: Uint32Array,
@@ -2020,6 +2207,14 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] Helper function to create an array of REMOVE operations.
+	 *
+	 * @param tokens - The token array to read from.
+	 * @param start - The start index.
+	 * @param end - The end index (exclusive).
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @param debug - A flag to enable verbose logging.
+	 * @returns An array of REMOVE DiffResult tuples.
+	 * @public
 	 */
 	public _createDeletions(
 		tokens: Uint32Array,
@@ -2050,56 +2245,83 @@ export class MyersCoreDiff {
 
 	/**
 	 * [TOOLBOX] Reconstructs the diff from the trace generated by `calculateDiff`.
+	 *
+	 * @param trace - The array of O(ND) trace buffers.
+	 * @param oldTokens - The tokenized 'old' sequence.
+	 * @param oldStart - The start index for diffing in oldTokens.
+	 * @param oldEnd - The end index (exclusive) for diffing in oldTokens.
+	 * @param newTokens - The tokenized 'new' sequence.
+	 * @param newStart - The start index for diffing in newTokens.
+	 * @param newEnd - The end index (exclusive) for diffing in newTokens.
+	 * @param idToString - A map to convert token IDs back to strings.
+	 * @returns An array of DiffResult tuples.
+	 * @public
 	 */
 	public buildValues(
 		trace: Int32Array[],
 		oldTokens: Uint32Array, oldStart: number, oldEnd: number,
 		newTokens: Uint32Array, newStart: number, newEnd: number,
-		idToString: string[]
+		idToString: string[],
+		debug?: boolean
 	): DiffResult[] {
-		// console.log('\n--- [buildValues START] ---');
+		if (__DEV__ && debug) {
+			console.log('\n--- [buildValues START] ---');
+		}
 		let x = oldEnd - oldStart;
 		let y = newEnd - newStart;
 		const result: DiffResult[] = [];
 		const offset = oldEnd - oldStart + newEnd - newStart;
-		// console.log(`Initial position: x=${x}, y=${y}. Trace history length: ${trace.length}`);
-
+		if (__DEV__ && debug) {
+			console.log(`Initial position: x=${x}, y=${y}. Trace history length: ${trace.length}`);
+		}
 		for (let d = trace.length - 1; d >= 0; d--) {
 			const v = trace[d];
 			const k = x - y;
 			const kOffset = k + offset;
-			// console.log(`\n[d=${d}] Backtracking... Current position: (x=${x}, y=${y}), k=${k}`);
-
+			if (__DEV__ && debug) {
+				console.log(`\n[d=${d}] Backtracking... Current position: (x=${x}, y=${y}), k=${k}`);
+			}
 			const prevK = (k === -d || (k !== d && v[kOffset - 1] < v[kOffset + 1]))
 				? k + 1
 				: k - 1;
 			const prevKOffset = prevK + offset;
 			const prevX = v[prevKOffset];
 			const prevY = prevX - prevK;
-			// console.log(`  Calculated previous k=${prevK}. Previous position from trace: (prev_x=${prevX}, prev_y=${prevY})`);
-
+			if (__DEV__ && debug) {
+				console.log(`  Calculated previous k=${prevK}. Previous position from trace: (prev_x=${prevX}, prev_y=${prevY})`);
+			}
 			let snakeX = x;
 			let snakeY = y;
 			while (snakeX > prevX && snakeY > prevY) {
 				const tokenValue = idToString[oldTokens[oldStart + snakeX - 1]];
 				result.unshift([DiffOperation.EQUAL, tokenValue]);
-				// console.log(`  SNAKE: Found EQUAL token "${tokenValue}" at (old:${snakeX - 1}, new:${snakeY - 1}). Prepending to result.`);
+				if (__DEV__ && debug) {
+					console.log(`  SNAKE: Found EQUAL token "${tokenValue}" at (old:${snakeX - 1}, new:${snakeY - 1}). Prepending to result.`);
+				}
 				snakeX--;
 				snakeY--;
 			}
 			if (x !== snakeX || y !== snakeY) {
-				// console.log(`  SNAKE END: Moved back from (x=${x}, y=${y}) to (x=${snakeX}, y=${snakeY})`);
+				if (__DEV__ && debug) {
+					if (__DEV__ && debug) {
+						console.log(`  SNAKE END: Moved back from (x=${x}, y=${y}) to (x=${snakeX}, y=${snakeY})`);
+					}
+				}
 			}
 
 			if (d > 0) {
 				if (prevX === snakeX) { // Down move, means addition
 					const tokenValue = idToString[newTokens[newStart + snakeY - 1]];
 					result.unshift([DiffOperation.ADD, tokenValue]);
-					// console.log(`  OPERATION: ADD. Token: "${tokenValue}" from new[${newStart + snakeY - 1}]. Prepending to result.`);
+					if (__DEV__ && debug) {
+						console.log(`  OPERATION: ADD. Token: "${tokenValue}" from new[${newStart + snakeY - 1}]. Prepending to result.`);
+					}
 				} else { // Right move, means removal
 					const tokenValue = idToString[oldTokens[oldStart + snakeX - 1]];
 					result.unshift([DiffOperation.REMOVE, tokenValue]);
-					// console.log(`  OPERATION: REMOVE. Token: "${tokenValue}" from old[${oldStart + snakeX - 1}]. Prepending to result.`);
+					if (__DEV__ && debug) {
+						console.log(`  OPERATION: REMOVE. Token: "${tokenValue}" from old[${oldStart + snakeX - 1}]. Prepending to result.`);
+					}
 				}
 			}
 
@@ -2107,11 +2329,15 @@ export class MyersCoreDiff {
 			y = prevY;
 
 			if (x <= 0 && y <= 0) {
-				// console.log(`[d=${d}] Reached origin (0,0). Backtracking complete.`);
+				if (__DEV__ && debug) {
+					console.log(`[d=${d}] Reached origin (0,0). Backtracking complete.`);
+				}
 				break;
 			}
 		}
-		// console.log('--- [buildValues END] ---\n');
+		if (__DEV__ && debug) {
+			console.log('--- [buildValues END] ---\n');
+		}
 		return result;
 	}
 

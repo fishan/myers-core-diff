@@ -1,8 +1,14 @@
 // test/preserve_structure.test.ts
 import { suite, test } from 'mocha';
 import * as assert from 'assert';
-import { MyersCoreDiff, DiffOperation, type DiffResult, type DiffOptions } from '../src/myers_core_diff.js';
-import { registerPreserveStructureStrategy } from '../src/strategy_preserve.js';
+import { 
+    MyersCoreDiff, 
+    DiffOperation, 
+    type DiffResult, 
+    type DiffOptions,
+    registerPatienceDiffStrategy,
+    registerPreserveStructureStrategy
+} from '@fishan/myers-core-diff';
 registerPreserveStructureStrategy(MyersCoreDiff);
 
 // =============== HELPER FUNCTIONS (from myers_core_direct.test.ts) ===============

@@ -272,6 +272,26 @@ You can pass these options into the `diff()` method:
 
 The engine is validated by a comprehensive suite of **126 tests**, designed to ensure correctness, reliability, and performance—from the lowest-level primitives to the high-level strategy plugins.
 
+### How to Run Tests
+
+This project uses `mocha` and `ts-node` for testing.
+
+#### 1. Development Tests (Fast)
+
+This command runs tests directly against the un-compiled `src/` files using `ts-node`. It is ideal for rapid development and debugging, as it does not require a build step.
+
+```bash
+npm run test:dev
+```
+
+2. Production Build Tests (Verification)
+This command first builds the entire project, creating a minified, production-ready bundle in dist/. It then runs the test suite against that minified bundle. This is the official verification step to ensure the build process or minification did not break any functionality.
+
+```bash
+npm test
+# (or npm run test:prod)
+```
+
 The test methodology is built on three pillars:
 
 - **White-Box (Direct) Tests**: Validate internal primitives like `_findMiddleSnake`.
