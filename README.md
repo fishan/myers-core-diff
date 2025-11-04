@@ -244,7 +244,7 @@ console.log(result);
 /*
 [
   [ 0, 'a' ], // EQUAL
-  [ -1, 'b' ], // REMOVE
+  [ 2, 'b' ], // REMOVE
   [ 1, 'X' ], // ADD
   [ 0, 'c' ], // EQUAL
   [ 0, 'd' ], // EQUAL
