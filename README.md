@@ -4,7 +4,6 @@
 
 
 [![NPM Version](https://img.shields.io/npm/v/@fishan/myers-core-diff.svg?style=flat)](https://www.npmjs.com/package/@fishan/myers-core-diff)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/fishan/myers-core-diff/ci.yml?branch=main)](https://github.com/fishan/myers-core-diff/actions)
 [![License](https://img.shields.io/npm/l/@fishan/myers-core-diff.svg)](./LICENSE)
 
 **A high-performance core diff engine based on Myers' algorithm, designed as an extensible "Toolbox" that can be enhanced with pluggable strategies.**
